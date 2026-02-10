@@ -4,19 +4,19 @@ Realtime hand-gesture recognition for driving simple car commands with MediaPipe
 
 ## What is included
 
-- Data recording tool: `record_landmarks.py`
-- Training script: `train_baseline.py`
-- Live inference script: `live_recognize.py`
-- Shared feature extraction: `features.py`
+- Data recording tool: `src/record_landmarks.py`
+- Training script: `src/train_baseline.py`
+- Live inference script: `src/live_recognize.py`
+- Shared feature extraction: `src/features.py`
 - Detailed architecture docs: `HOW_IT_WORKS.md`
 
 ## Quick start
 
 ```bash
 python -m pip install -r requirements.txt
-python record_landmarks.py
-python train_baseline.py
-python live_recognize.py
+python src/record_landmarks.py
+python src/train_baseline.py
+python src/live_recognize.py
 ```
 
 ## Privacy and dataset policy
@@ -27,5 +27,5 @@ python live_recognize.py
 
 ## Notes
 
-- If you change feature logic, keep training and live inference in sync (this is already centralized in `features.py`).
+- If you change feature logic, keep training and live inference in sync (this is centralized in `src/features.py`).
 - Current gesture classes are listed in `models/labels.txt`.

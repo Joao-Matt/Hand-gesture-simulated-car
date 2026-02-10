@@ -3,6 +3,7 @@ import time
 import os
 import numpy as np
 import mediapipe as mp
+from pathlib import Path
 
 # ---------------- Settings ----------------
 CAM_INDEX = 0
@@ -13,7 +14,8 @@ TRACKING_CONF = 0.7
 # Recording settings
 MIN_FRAMES = 10            # minimum frames to accept a sample
 MAX_SECONDS = 2.0          # safety cap if you forget to stop
-SAVE_ROOT = "dataset"      # dataset folder
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SAVE_ROOT = ROOT_DIR / "dataset"      # dataset folder
 # ------------------------------------------
 
 GESTURES = {
@@ -36,7 +38,7 @@ def put_text(img, text, org, scale=0.7, thickness=2):
 def ensure_dirs():
     for g in set(GESTURES.values()):
         for hand in ["Left", "Right"]:
-            os.makedirs(os.path.join(SAVE_ROOT, g, hand), exist_ok=True)
+            (SAVE_ROOT / g / hand).mkdir(parents=True, exist_ok=True)
 
 def pick_primary_hand(res, frame_w, frame_h):
     """
@@ -65,9 +67,9 @@ def pick_primary_hand(res, frame_w, frame_h):
 def save_sample(gesture, hand_label, X, ts, fps_est):
     # filename with timestamp
     t = time.strftime("%Y%m%d_%H%M%S")
-    out_dir = os.path.join(SAVE_ROOT, gesture, hand_label)
+    out_dir = SAVE_ROOT / gesture / hand_label
     idx = len([f for f in os.listdir(out_dir) if f.endswith(".npz")])
-    out_path = os.path.join(out_dir, f"{t}_{idx:04d}.npz")
+    out_path = out_dir / f"{t}_{idx:04d}.npz"
     np.savez_compressed(
         out_path,
         X=np.asarray(X, dtype=np.float32),
@@ -76,7 +78,7 @@ def save_sample(gesture, hand_label, X, ts, fps_est):
         gesture=str(gesture),
         hand=str(hand_label),
     )
-    return out_path
+    return str(out_path)
 
 def main():
     ensure_dirs()

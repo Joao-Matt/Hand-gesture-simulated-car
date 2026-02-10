@@ -4,6 +4,7 @@ import csv
 import os
 import numpy as np
 import mediapipe as mp
+from pathlib import Path
 
 # ---------- Settings ----------
 CAM_INDEX = 0
@@ -15,7 +16,8 @@ DRAW = True
 
 # Optional: set True to dump landmarks every frame to CSV (for Phase 2)
 DUMP_CSV = False
-CSV_PATH = "landmarks_dump.csv"
+ROOT_DIR = Path(__file__).resolve().parents[1]
+CSV_PATH = ROOT_DIR / "landmarks_dump.csv"
 # -----------------------------
 
 mp_hands = mp.solutions.hands

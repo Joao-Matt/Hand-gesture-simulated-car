@@ -4,17 +4,17 @@ This project records hand-landmark sequences, trains a gesture classifier, and r
 
 ## High-level pipeline
 
-1. `record_landmarks.py` records labeled sequences into `dataset/<GESTURE>/<HAND>/*.npz`.
-2. `train_baseline.py` loads those sequences, converts each one to a fixed-length feature vector, trains a RandomForest model, and saves it to `models/gesture_rf.joblib`.
-3. `live_recognize.py` captures a live sliding window, computes the exact same feature vector format, predicts a gesture, smooths predictions, and outputs commands.
+1. `src/record_landmarks.py` records labeled sequences into `dataset/<GESTURE>/<HAND>/*.npz`.
+2. `src/train_baseline.py` loads those sequences, converts each one to a fixed-length feature vector, trains a RandomForest model, and saves it to `models/gesture_rf.joblib`.
+3. `src/live_recognize.py` captures a live sliding window, computes the exact same feature vector format, predicts a gesture, smooths predictions, and outputs commands.
 
 ## File responsibilities
 
-- `hand_pose_live.py`
+- `src/hand_pose_live.py`
   - Debug/visualization utility for live MediaPipe landmarks.
   - Optional CSV dump mode.
 
-- `record_landmarks.py`
+- `src/record_landmarks.py`
   - Data collection tool.
   - You pick a gesture with keys `1..7` and start/stop recording with `Q`/`P`.
   - Saves samples as compressed `.npz` files with:
@@ -23,27 +23,27 @@ This project records hand-landmark sequences, trains a gesture classifier, and r
     - `fps_est`
     - `gesture`, `hand`
 
-- `train_baseline.py`
+- `src/train_baseline.py`
   - Loads all samples from `dataset`.
-  - Extracts feature vectors per sample via `motion_features` from `features.py`.
+  - Extracts feature vectors per sample via `motion_features` from `src/features.py`.
   - Splits train/test stratified by gesture.
   - Trains `RandomForestClassifier` and prints report + confusion matrix.
   - Saves model and label list in `models/`.
 
-- `live_recognize.py`
+- `src/live_recognize.py`
   - Captures webcam frames and tracks landmarks.
   - Maintains a sliding time window (`WINDOW_SECONDS`).
-  - Uses shared `motion_features` from `features.py` (same shape/order as training).
+  - Uses shared `motion_features` from `src/features.py` (same shape/order as training).
   - Applies confidence threshold + streak smoothing + cooldown.
   - Maps predicted gesture to a command payload.
 
-- `features.py`
+- `src/features.py`
   - Shared feature extraction module used by both training and live inference.
   - Holds `normalize_landmarks`, `wrist_xy`, `wrist_path_features`, `signed_rotation_features`, and `motion_features`.
 
 ## Feature extraction details
 
-`features.py` defines one shared feature layout used by both training and live inference:
+`src/features.py` defines one shared feature layout used by both training and live inference:
 
 1. Mean of normalized landmarks `(63)`
 2. Std of normalized landmarks `(63)`
@@ -75,16 +75,16 @@ This usually improves circle-direction disambiguation (`CIRCLE_CW` vs `CIRCLE_CC
 
 ## Important consistency rule
 
-Training and inference must compute features in the same order and shape. Keeping this logic in `features.py` avoids drift.
+Training and inference must compute features in the same order and shape. Keeping this logic in `src/features.py` avoids drift.
 
 ## Typical workflow
 
 1. Collect data:
-   - `python record_landmarks.py`
+   - `python src/record_landmarks.py`
 2. Train model:
-   - `python train_baseline.py`
+   - `python src/train_baseline.py`
 3. Run live recognition:
-   - `python live_recognize.py`
+   - `python src/live_recognize.py`
 
 If you change features, retrain before running live recognition.
 

@@ -1,6 +1,6 @@
-import os
 import glob
 import numpy as np
+from pathlib import Path
 from collections import Counter
 
 from sklearn.model_selection import train_test_split
@@ -9,9 +9,10 @@ from sklearn.ensemble import RandomForestClassifier
 from joblib import dump
 from features import motion_features
 
-DATASET_DIR = "dataset"
-OUT_DIR = "models"
-os.makedirs(OUT_DIR, exist_ok=True)
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DATASET_DIR = ROOT_DIR / "dataset"
+OUT_DIR = ROOT_DIR / "models"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 GESTURES = [
     "STOP_IDLE",
@@ -27,7 +28,7 @@ HANDS = ["Left", "Right"]
 
 def load_dataset():
     X, y_g, y_h = [], [], []
-    paths = glob.glob(os.path.join(DATASET_DIR, "*", "*", "*.npz"))
+    paths = glob.glob(str(DATASET_DIR / "*" / "*" / "*.npz"))
     for p in paths:
         data = np.load(p, allow_pickle=True)
         seq = data["X"]  # (T,63)
@@ -82,13 +83,15 @@ def main():
     print(confusion_matrix(y_test, y_pred, labels=GESTURES))
 
     # Save model + metadata
-    dump(clf, os.path.join(OUT_DIR, "gesture_rf.joblib"))
-    with open(os.path.join(OUT_DIR, "labels.txt"), "w", encoding="utf-8") as f:
+    model_path = OUT_DIR / "gesture_rf.joblib"
+    labels_path = OUT_DIR / "labels.txt"
+    dump(clf, model_path)
+    with open(labels_path, "w", encoding="utf-8") as f:
         for g in GESTURES:
             f.write(g + "\n")
 
-    print(f"\nSaved model to: {os.path.join(OUT_DIR, 'gesture_rf.joblib')}")
-    print("Saved labels to: models/labels.txt")
+    print(f"\nSaved model to: {model_path}")
+    print(f"Saved labels to: {labels_path}")
 
 if __name__ == "__main__":
     main()

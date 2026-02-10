@@ -2,6 +2,7 @@ import time
 import cv2
 import numpy as np
 import mediapipe as mp
+from pathlib import Path
 from collections import deque
 from joblib import load
 from features import motion_features, wrist_xy
@@ -34,8 +35,9 @@ STOP_ARM_STREAK = 3          # must see STOP this many times to arm/disarm
 DISARM_ON_STOP = True        # STOP also disarms (safety reset)
 
 # Model paths
-MODEL_PATH = r"models\gesture_rf.joblib"
-LABELS_PATH = r"models\labels.txt"
+ROOT_DIR = Path(__file__).resolve().parents[1]
+MODEL_PATH = ROOT_DIR / "models" / "gesture_rf.joblib"
+LABELS_PATH = ROOT_DIR / "models" / "labels.txt"
 # -----------------------------------------
 
 mp_hands = mp.solutions.hands
