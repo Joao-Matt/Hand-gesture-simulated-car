@@ -1,4 +1,9 @@
 import time
+import json
+import os
+import socket
+import subprocess
+import ipaddress
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -6,6 +11,74 @@ from pathlib import Path
 from collections import deque
 from joblib import load
 from features import motion_features, wrist_xy
+
+
+def resolve_bridge_host():
+    env_host = os.environ.get("GESTURE_BRIDGE_HOST")
+    if env_host:
+        return env_host, "GESTURE_BRIDGE_HOST"
+
+    wsl_distro = os.environ.get("GESTURE_WSL_DISTRO", "Ubuntu-20.04")
+    wsl_user = os.environ.get("GESTURE_WSL_USER", "ros_joe")
+
+    def collect_candidates(wsl_args, source):
+        candidates = []
+        try:
+            output = subprocess.check_output(
+                [*wsl_args, "sh", "-lc", "ip -4 -o addr"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=2.0,
+            )
+            for line in output.splitlines():
+                parts = line.split()
+                if len(parts) >= 4 and parts[2] == "inet":
+                    candidates.append((source, parts[1], parts[3].split("/", 1)[0]))
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return candidates
+
+    candidates = collect_candidates(
+        ["wsl", "-d", wsl_distro, "-u", wsl_user],
+        f"{wsl_distro}/{wsl_user}",
+    )
+    if not candidates:
+        candidates = collect_candidates(["wsl"], "default WSL")
+
+    def candidate_score(item):
+        source, iface, host = item
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            return -1
+
+        if (
+            addr.version != 4
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
+            return -1
+
+        # Prefer WSL's private NAT range over VPN or Wi-Fi addresses.
+        if host.startswith("172.") and addr.is_private:
+            return 100
+        if iface.startswith("eth") and addr.is_private:
+            return 80
+        if host.startswith("10.") and addr.is_private:
+            return 60
+        if host.startswith("192.168.") and addr.is_private:
+            return 40
+        return 10
+
+    ranked = sorted(candidates, key=candidate_score, reverse=True)
+    if ranked and candidate_score(ranked[0]) >= 0:
+        source, iface, host = ranked[0]
+        return host, f"auto WSL {source} {iface}"
+
+    return "127.0.0.1", "fallback"
+
 
 # ---------------- Settings ----------------
 CAM_INDEX = 0
@@ -29,15 +102,19 @@ CONF_THRESH = 0.70
 COOLDOWN_SECONDS = 0.6
 
 # Arm/disarm behavior
-ARM_BY_STOP = True
+ARM_GESTURES = {"CIRCLE_CW", "CIRCLE_CCW"}
 STOP_LABEL = "STOP_IDLE"
-STOP_ARM_STREAK = 3          # must see STOP this many times to arm/disarm
-DISARM_ON_STOP = True        # STOP also disarms (safety reset)
+STOP_DISARM_STREAK = 3       # must see STOP this many times to disarm
 
 # Model paths
 ROOT_DIR = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT_DIR / "models" / "gesture_rf.joblib"
 LABELS_PATH = ROOT_DIR / "models" / "labels.txt"
+
+# UDP bridge to the ROS 2/Gazebo driver running in WSL.
+BRIDGE_HOST, BRIDGE_HOST_SOURCE = resolve_bridge_host()
+BRIDGE_PORT = int(os.environ.get("GESTURE_BRIDGE_PORT", "4210"))
+HEARTBEAT_SECONDS = 0.2
 # -----------------------------------------
 
 mp_hands = mp.solutions.hands
@@ -91,33 +168,35 @@ def motion_score(seq_63):
     return float(np.mean(speed)), float(np.max(speed))
 
 
-# --- Simple command mapping (prints only) ---
-def gesture_to_command(gesture, hand_label):
-    """
-    For now just returns a dict-like string for printing.
-    Later we’ll publish this over MQTT to your sim/robot.
-    """
-    # Example mapping placeholders (you’ll tune this later)
-    if gesture == "SWIPE_LEFT":
-        return {"cmd": "ROTATE_LEFT", "hand": hand_label}
-    if gesture == "SWIPE_RIGHT":
-        return {"cmd": "ROTATE_RIGHT", "hand": hand_label}
-    if gesture == "PUSH":
-        return {"cmd": "FORWARD", "hand": hand_label}
-    if gesture == "PULL":
-        return {"cmd": "BACKWARD", "hand": hand_label}
-    if gesture == "CIRCLE_CW":
-        return {"cmd": "CIRCLE_CW_MODE", "hand": hand_label}
-    if gesture == "CIRCLE_CCW":
-        return {"cmd": "CIRCLE_CCW_MODE", "hand": hand_label}
-    if gesture == STOP_LABEL:
-        return {"cmd": "STOP_RESET", "hand": hand_label}
-    return {"cmd": "UNKNOWN", "hand": hand_label}
+GESTURE_TO_DRIVE_CMD = {
+    STOP_LABEL: "STOP",
+    "PUSH": "FORWARD",
+    "PULL": "BACKWARD",
+    "SWIPE_LEFT": "LEFT",
+    "SWIPE_RIGHT": "RIGHT",
+}
+
+
+def gesture_to_drive_command(gesture):
+    return GESTURE_TO_DRIVE_CMD.get(gesture)
+
+
+def send_drive_command(sock, addr, cmd, gesture, confidence, hand_label):
+    payload = {
+        "cmd": cmd,
+        "gesture": gesture or "",
+        "confidence": float(confidence),
+        "hand": hand_label or "",
+        "ts": time.time(),
+    }
+    sock.sendto(json.dumps(payload).encode("utf-8"), addr)
 
 
 def main():
     labels = load_labels(LABELS_PATH)
     clf = load(MODEL_PATH)
+    bridge_addr = (BRIDGE_HOST, BRIDGE_PORT)
+    bridge_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     cap = cv2.VideoCapture(CAM_INDEX)
     if not cap.isOpened():
@@ -145,13 +224,19 @@ def main():
     pred_streak_count = 0
 
     stop_streak = 0
+    active_cmd = "STOP"
+    active_gesture = STOP_LABEL
+    active_conf = 1.0
+    active_hand = ""
+    last_bridge_send = 0.0
 
     # FPS
     prev_t = time.time()
     fps = 0.0
 
     print("\n[Live Recognize] Running.")
-    print("Controls: Q quit | (optional) A toggle armed\n")
+    print("Controls: Q quit | A toggle armed | circles arm | STOP disarms\n")
+    print(f"[Gesture Bridge] Sending UDP commands to {BRIDGE_HOST}:{BRIDGE_PORT} ({BRIDGE_HOST_SOURCE})")
 
     try:
         while True:
@@ -215,7 +300,7 @@ def main():
                         top_label = clf.classes_[idx]
                         top_conf = float(probs[idx])
 
-                        if stable_like_stop and (not armed):
+                        if stable_like_stop:
                             # only for display/smoothing; doesn't change the trained classifier itself
                             top_label = STOP_LABEL
                             top_conf = max(top_conf, 0.99)
@@ -227,7 +312,7 @@ def main():
                             pred_streak_label = top_label
                             pred_streak_count = 1
 
-                        # STOP gating streak (used for arm/disarm)
+                        # STOP gating streak (used for disarm)
                         # If the hand is very stable, treat it as STOP-like even if classifier briefly says PUSH.
                         if stable_like_stop:
                             stop_streak += 1
@@ -241,32 +326,58 @@ def main():
                         confident_ok = top_conf >= CONF_THRESH
                         stable_ok = pred_streak_count >= STREAK_REQUIRED
 
-                        # Arm/disarm logic driven by STOP
-                        if ARM_BY_STOP and stop_streak >= STOP_ARM_STREAK:
+                        # Circle gestures arm the bridge. STOP only disarms/stops.
+                        if top_label in ARM_GESTURES and confident_ok and stable_ok and cool_ok:
                             if not armed:
                                 armed = True
-                                print(f"[ARMED] via {STOP_LABEL}  conf={top_conf:.2f}  hand={hand_label}")
+                                active_cmd = "STOP"
+                                active_gesture = top_label
+                                active_conf = top_conf
+                                active_hand = hand_label or ""
+                                send_drive_command(bridge_sock, bridge_addr, active_cmd, active_gesture, active_conf, active_hand)
+                                last_bridge_send = now
+                                print(f"[ARMED] via {top_label}  conf={top_conf:.2f}  hand={hand_label}")
                                 last_event_time = now
-                            elif DISARM_ON_STOP:
+
+                        if stop_streak >= STOP_DISARM_STREAK:
+                            if armed or active_cmd != "STOP":
                                 armed = False
+                                active_cmd = "STOP"
+                                active_gesture = STOP_LABEL
+                                active_conf = top_conf
+                                active_hand = hand_label or ""
+                                send_drive_command(bridge_sock, bridge_addr, active_cmd, active_gesture, active_conf, active_hand)
+                                last_bridge_send = now
                                 print(f"[DISARM] via {STOP_LABEL}  conf={top_conf:.2f}  hand={hand_label}")
                                 last_event_time = now
                             stop_streak = 0  # reset
 
                         # Trigger non-STOP gestures only when armed
-                        if top_label and top_label != STOP_LABEL:
+                        if top_label and top_label != STOP_LABEL and top_label not in ARM_GESTURES:
                             if armed and confident_ok and stable_ok and cool_ok:
-                                msg = gesture_to_command(top_label, hand_label)
-                                print(f"[EVENT] {top_label:10s} conf={top_conf:.2f} hand={hand_label}  -> {msg}")
-                                last_event_time = now
+                                cmd = gesture_to_drive_command(top_label)
+                                if cmd:
+                                    active_cmd = cmd
+                                    active_gesture = top_label
+                                    active_conf = top_conf
+                                    active_hand = hand_label or ""
+                                    send_drive_command(bridge_sock, bridge_addr, active_cmd, active_gesture, active_conf, active_hand)
+                                    last_bridge_send = now
+                                    print(f"[EVENT] {top_label:10s} conf={top_conf:.2f} hand={hand_label}  -> {active_cmd}")
+                                    last_event_time = now
+
+            if (now - last_bridge_send) >= HEARTBEAT_SECONDS:
+                send_drive_command(bridge_sock, bridge_addr, active_cmd, active_gesture, active_conf, active_hand)
+                last_bridge_send = now
 
             # HUD
             put_text(frame, f"FPS: {fps:.1f}", (10, 30))
             put_text(frame, f"Armed: {armed}", (10, 60))
+            put_text(frame, f"Cmd: {active_cmd}", (10, 90), scale=0.55)
             if top_label:
-                put_text(frame, f"spd mean/max: {mean_spd:.4f}/{max_spd:.4f}", (10, 180), scale=0.55)
-            put_text(frame, f"Window: {WINDOW_SECONDS:.1f}s  Thresh: {CONF_THRESH:.2f}", (10, 120), scale=0.55)
-            put_text(frame, "Make STOP to arm/disarm. Q quit.", (10, 150), scale=0.55)
+                put_text(frame, f"spd mean/max: {mean_spd:.4f}/{max_spd:.4f}", (10, 210), scale=0.55)
+            put_text(frame, f"Window: {WINDOW_SECONDS:.1f}s  Thresh: {CONF_THRESH:.2f}", (10, 150), scale=0.55)
+            put_text(frame, "Circle arms. STOP disarms. Q quit.", (10, 180), scale=0.55)
 
             cv2.imshow("Live Recognize", frame)
 
@@ -275,11 +386,17 @@ def main():
                 break
             if key in (ord('a'), ord('A')):
                 armed = not armed
+                active_cmd = "STOP"
+                active_gesture = STOP_LABEL
+                active_conf = 1.0
+                send_drive_command(bridge_sock, bridge_addr, active_cmd, active_gesture, active_conf, active_hand)
+                last_bridge_send = now
                 print(f"[TOGGLE] armed={armed}")
 
     finally:
         hands.close()
         cap.release()
+        bridge_sock.close()
         cv2.destroyAllWindows()
 
 
