@@ -448,7 +448,37 @@ car_assembly_2nd gesture_gazebo_driver
 
 ## Final Run Commands
 
-Use separate terminals.
+The ROS/Gazebo side can now be started with one ROS 2 launch file.
+
+### One-Command ROS/Gazebo Launch
+
+From WSL Ubuntu-20.04 as `ros_joe`:
+
+```bash
+source /opt/ros/foxy/setup.bash
+source ~/HandGestureDrone_ws/install/setup.bash
+ros2 launch car_assembly_2nd gesture_car.launch.py
+```
+
+This launch file starts:
+
+```text
+Gazebo with gesture_empty.world
+spawn_entity.py for car_assembly_2nd
+gesture_gazebo_driver on UDP port 4210
+```
+
+The Windows webcam recognizer still runs separately in PowerShell because it uses the Windows venv and camera.
+
+You can override launch settings like this:
+
+```bash
+ros2 launch car_assembly_2nd gesture_car.launch.py turn_speed:=2.5 udp_port:=4210
+```
+
+### Manual Terminal Flow
+
+The old manual flow is still useful for debugging. Use separate terminals.
 
 ### Terminal 1: Start Gazebo
 
