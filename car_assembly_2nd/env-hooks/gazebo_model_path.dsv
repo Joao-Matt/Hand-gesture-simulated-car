@@ -1,0 +1,3 @@
+prepend-non-duplicate;GAZEBO_MODEL_PATH;share
+prepend-non-duplicate;GAZEBO_MODEL_PATH;/usr/share/gazebo-11/models
+prepend-non-duplicate;GAZEBO_RESOURCE_PATH;/usr/share/gazebo-11
