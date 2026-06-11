@@ -26,3 +26,8 @@ dataset/
 models/*
 !models/labels.txt
 landmarks_dump.csv
+
+# Local writeups and demo recordings
+/Gesture car simulation sum .docx
+/take#1.mp4
+/take#2.mp4
